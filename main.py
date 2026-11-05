@@ -21,6 +21,7 @@ ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 МБ на файл
 MAX_META_SIZE = 64 * 1024         # 64 КБ на метаданные
 META_NAME = "meta.json"
+MAX_DISK_USAGE = float(os.environ.get("MAX_DISK_USAGE", 95))  # % занятости диска
 CLAIM_TTL = 10 * 60  # сек: сколько ждём подтверждения, потом батчи возвращаются в очередь
 CLAIM_ID = PathParam(pattern=r"^[0-9a-f]{32}$")
 
@@ -74,6 +75,16 @@ def recover() -> None:
     requeue_stale()
 
 
+def disk_usage_percent() -> float:
+    u = shutil.disk_usage(DATA_DIR)
+    return u.used / (u.used + u.free) * 100  # как «Use%» в df
+
+
+def ensure_disk_space() -> None:
+    if disk_usage_percent() >= MAX_DISK_USAGE:
+        raise HTTPException(507, "Диск сервера заполнен, загрузка временно недоступна")
+
+
 def parse_metadata(raw: str | None) -> dict:
     if not raw:
         return {}
@@ -94,6 +105,7 @@ async def upload(
     metadata: str | None = Form(None, description='JSON-объект, например {"camera": "1"}'),
 ):
     """Один запрос = один батч: картинки + meta.json."""
+    ensure_disk_space()
     meta = parse_metadata(metadata)
 
     batch_id = uuid.uuid4().hex
@@ -105,6 +117,7 @@ async def upload(
             if ext not in ALLOWED_EXT or not (f.content_type or "").startswith("image/"):
                 raise HTTPException(400, f"Недопустимый файл: {f.filename}")
 
+            ensure_disk_space()  # диск мог заполниться, пока идёт большая загрузка
             safe_name = f"{i:03d}_{Path(f.filename).name}"  # защита от path traversal
             size = 0
             with open(tmp_dir / safe_name, "wb") as out:
