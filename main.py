@@ -1,12 +1,14 @@
 import json
 import os
+import secrets
 import shutil
 import time
 import uuid
 import zipfile
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Path as PathParam, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Path as PathParam, Response, UploadFile
+from fastapi.security import APIKeyHeader
 from fastapi.responses import FileResponse
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -22,7 +24,26 @@ META_NAME = "meta.json"
 CLAIM_TTL = 10 * 60  # сек: сколько ждём подтверждения, потом батчи возвращаются в очередь
 CLAIM_ID = PathParam(pattern=r"^[0-9a-f]{32}$")
 
-app = FastAPI(title="Image batch server")
+API_KEY = os.environ.get("API_KEY")
+if not API_KEY:
+    raise RuntimeError("Переменная окружения API_KEY не задана")
+
+_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def require_api_key(key: str | None = Depends(_key_header)) -> None:
+    if not key or not secrets.compare_digest(key, API_KEY):
+        raise HTTPException(401, "Неверный или отсутствующий X-API-Key")
+
+
+# ключ проверяется на всех эндпоинтах; docs/redoc/openapi.json отключены
+app = FastAPI(
+    title="Image batch server",
+    dependencies=[Depends(require_api_key)],
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 
 def requeue(claim: Path) -> None:
